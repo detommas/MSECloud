@@ -1,0 +1,112 @@
+---
+title: "SWFSC Cloud MSE Workflow"
+author: "Desiree Tommasi"
+format: html
+editor: visual
+execute: 
+  eval: false
+  echo: true
+---
+
+## SWFSC Google Cloud MSE Workflow Helper Document
+
+This document was created as part of 2025 NOAA NMFS Openscapes. Goal of the SWFSC MSE team is to develop a workflow for running MSE simulations on the cloud as our in-house server will be gone by December 2026.
+
+## Mounting a bucket to your Cloud Workstation
+
+1.  Send in an ITS help desk ticket to have them setup your own Google Cloud Bucket or to have access to the existing SWFSC FRD MSE bucket. Hoo, Robert, and me already have access to "frd_mse" bucket at [this link](https://console.cloud.google.com/storage/browser/frd_mse?inv=1&invt=Abzq8g&project=ggn-nmfs-swfsc-infra-1).
+
+Instructions to mount the bucket are taken from [those of Google Cloud](https://docs.cloud.google.com/storage/docs/cloud-storage-fuse/quickstart-mount-bucket) and [FIMS instructions](https://github.com/NOAA-FIMS/fims-gcp-workstations/blob/main/google_cloud_bucket_mounting.md) from Bai Li with one added fix from Alex Norelli at SEFSC. Pasted below for ease of use. These are for Rstudio or Posit Rstudio Linux workstations.
+
+2.  Install Cloud Storage FUSE. This is the program that will make for a smooth file transfer. In your workstation click on the Terminal tab in R studio and paste the code chunks below.
+
+``` bash
+#This code snippet has to be run in a bash terminal (access in Rstudio from Terminal tab)
+#Install required packages
+sudo apt-get update
+sudo apt-get install -y curl lsb-release
+```
+
+``` bash
+#add FUSE URL as a package source
+export GCSFUSE_REPO=gcsfuse-`lsb_release -c -s`
+echo "deb [signed-by=/usr/share/keyrings/cloud.google.asc] https://packages.cloud.google.com/apt $GCSFUSE_REPO main" | sudo tee /etc/apt/sources.list.d/gcsfuse.list
+```
+
+``` bash
+#Import the Google Cloud public key
+curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo tee /usr/share/keyrings/cloud.google.asc
+```
+
+``` bash
+#Install the FUSE package
+sudo apt-get update
+sudo apt-get install gcsfuse
+```
+
+3.  Authenticate yourself in Google Cloud. Entering this in the Terminal will prompt you to open a browser window. Click through all the steps, the last one will give you an authentication code to be pasted back in the Terminal. This was Alex's fix, note other versions of this in pages linked above did not work for me.
+
+``` bash
+gcloud auth application-default login --no-launch-browser
+```
+
+4.  Create a directory in your workstation home folder to mount the Google Cloud basket on. Here we will name it mse_bucket
+
+``` bash
+mkdir "$HOME/mse_bucket"
+```
+
+5.  Use FUSE package command to mount your bucket. Example below mounts our frd_mse bucket on the mse_bucket folder under the home directory of the workstation. Done! You now should see the mse_bucket folder in your home directory, and you can treat it as any other directory.
+
+``` bash
+gcsfuse frd_mse "$HOME/mse_bucket"
+```
+
+6.  Transfer files. Below is an example R code to move iterations folder after 10 runs of the PBF MSE were completed from the workstation to our mounted cloud bucket. Note it's faster to do the memory intensive running of code on the workstation and transfer at the end. If you are using SSMSE Alex Norelli modified the main run_SSMSE() function to call for the path to the bucket and automatically transfer files at the end of each iteration.
+
+```{r}
+library(foreach)
+library(doParallel)
+
+#Specify path of parent directory
+pdir <- "/home/user/PBF_MSE/PBF_MSE/"
+
+#specify name of folder bucket is mounted to
+bname <- "mse_bucket/"
+
+#Specify project name (all will be saved under this name)
+pname <- "PBF_MSE/"
+
+#specify scenario, harvest strategy and HCR to move
+scnnum <- 1
+hsnum <- 1
+hcrnum <- 1
+hs <- paste(hsnum, "/", sep = "")
+hcr <- paste(hcrnum, "/", sep = "")
+scn <- paste(scnnum, "/", sep = "")
+
+#Create directories for storage in mounted mse_bucket
+dir.create(paste0("/home/user/",bname, pname))
+dir.create(paste0("/home/user/",bname, pname, hs))
+dir.create(paste0("/home/user/",bname, pname, hs, hcr))
+dir.create(paste0("/home/user/",bname, pname, hs, hcr, scn))
+
+#if parallel cluster not already initiated
+#Calculate the numbers of cores 
+no_cores <- detectCores() - 2
+#Initiate cluster
+cl= makeCluster(no_cores)
+registerDoParallel(cl)
+
+#move each iteration
+foreach(itr = 1:10) %dopar% { 
+  #create destination directory for each iteration 
+  dir.create(paste0("/home/user/",bname, pname, hs, hcr, scn, itr,"/"))
+  #set source directory 
+  sdir <- (paste0(pdir, hs, hcr, scn, itr,"/"))
+  #move files
+  command_mv <- paste0("mv ",sdir,"* ", "/home/user/",bname, pname, hs, hcr, scn, itr,"/")
+  system(command=command_mv)}
+#terminate cluster
+stopCluster(cl)
+```
